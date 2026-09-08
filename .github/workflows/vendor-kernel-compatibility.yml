@@ -153,6 +153,44 @@ jobs:
           timeout: 30m
           concurrency: "3"
 
+      - name: Summarise BPF-LSM availability
+        # The enforcer step exits 0 on a kernel without BPF-LSM, because that is
+        # not a failure -- but it does mean a bare pass/fail column cannot tell
+        # "enforcer loaded" from "nothing to load". Pull the distinction out of
+        # the per-kernel command output and put it in the job summary, since
+        # which vendor kernels ship BPF-LSM is the thing this lane is for.
+        if: always()
+        run: |
+          python3 - <<'PY' >>"$GITHUB_STEP_SUMMARY"
+          import json, pathlib
+
+          report = pathlib.Path("reports/bpflsm-enforcer.json")
+          if not report.is_file():
+              print("BPF-LSM report not produced.")
+              raise SystemExit(0)
+
+          rows = []
+          for target in json.loads(report.read_text()).get("targets", []):
+              output = ""
+              for test in target.get("functional", {}).get("tests", []):
+                  output += (test.get("stdout_tail") or "") + (test.get("stderr_tail") or "")
+              if "Initialized BPF-LSM Enforcer" in output:
+                  state = "yes -- enforcer loaded"
+              elif "BPF-LSM enabled" in output:
+                  state = "yes -- but the enforcer FAILED to load"
+              elif "BPF-LSM not enabled" in output:
+                  state = "no"
+              else:
+                  state = "unknown (see report)"
+              rows.append((target["profile_id"], target.get("host", {}).get("kernel", ""), state))
+
+          print("## BPF-LSM availability on vendor kernels\n")
+          print("| Profile | Kernel | BPF-LSM |")
+          print("|---|---|---|")
+          for profile, kernel, state in rows:
+              print(f"| `{profile}` | `{kernel}` | {state} |")
+          PY
+
       - name: Upload compatibility reports
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
